@@ -7,7 +7,8 @@ ARG GO_VERSION=1.24.5
 FROM golang:${GO_VERSION}-bookworm AS builder
 
 ENV CGO_ENABLED=1 \
-    GOTOOLCHAIN=auto
+    GOTOOLCHAIN=auto \
+    NODE_OPTIONS=--max_old_space_size=4096
 
 # deps: git/make/gcc + Node.js 20 for webapp build
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -22,8 +23,7 @@ WORKDIR /src
 RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
 WORKDIR /src/mattermost/server
 
-# Build using official Makefile (does code-gen + webapp build)
-# This will produce ./bin/mattermost and webapp ./dist
+# Build using official Makefile (does code-gen + builds webapp)
 RUN make build
 
 ##
