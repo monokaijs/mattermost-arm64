@@ -11,28 +11,30 @@ ENV CGO_ENABLED=1 \
     NODE_OPTIONS=--max_old_space_size=4096 \
     NPM_CONFIG_FUND=false \
     NPM_CONFIG_AUDIT=false \
-    CI=1
-# If you prefer to always compile native addons from source instead of using vendor binaries, uncomment:
-# ENV npm_config_build_from_source=true
+    CI=1 \
+    npm_config_build_from_source=true
 
-# Tooling for webapp + native modules + a native gifsicle binary
+# Install Go build deps + Node.js + native image optimization libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git tzdata gnupg \
     make g++ python3 pkg-config \
-    autoconf automake libtool \
-    gifsicle \
+    autoconf automake libtool nasm \
+    gifsicle optipng pngquant libjpeg-dev zlib1g-dev \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && node --version && npm --version \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-# Always pull latest default branch
+
+# Always pull the latest default branch
 RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
 
 WORKDIR /src/mattermost/server
-# Use official Makefile (does codegen + builds server and webapp)
+
+# Build server + webapp using official Makefile
 RUN make build
+
 
 ##
 ## Runtime
@@ -55,7 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/* \
  && chown -R mattermost:mattermost /opt/mattermost
 
-# Defaults (override in compose/Coolify)
+# Defaults (override in docker-compose or Coolify env)
 ENV MM_SQLSETTINGS_DRIVERNAME=postgres \
     MM_SQLSETTINGS_DATASOURCE="postgres://mmuser:mostest@db:5432/mattermost?sslmode=disable&connect_timeout=10" \
     MM_SERVICESETTINGS_SITEURL="" \
