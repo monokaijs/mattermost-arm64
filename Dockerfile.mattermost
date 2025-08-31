@@ -14,7 +14,7 @@ ENV CGO_ENABLED=1 \
     CI=1 \
     npm_config_build_from_source=true
 
-# Install Go build deps + Node.js + native image optimization libs
+# Toolchain for webapp native deps + image optimizers
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git tzdata gnupg \
     make g++ python3 pkg-config \
@@ -27,14 +27,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 
-# Always pull the latest default branch
+# Always pull latest default branch
 RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
 
+# --- Pre-install webapp deps (including imagemin-* plugins) on ARM64 ---
+WORKDIR /src/mattermost/webapp
+# Use npm ci if lockfile fits; fall back to install if necessary
+RUN (npm ci || npm install) \
+ && npm install -D \
+      imagemin-optipng \
+      imagemin-mozjpeg \
+      imagemin-gifsicle \
+      imagemin-svgo
+
+# --- Build server + webapp via official Makefile ---
 WORKDIR /src/mattermost/server
-
-# Build server + webapp using official Makefile
 RUN make build
-
 
 ##
 ## Runtime
@@ -57,7 +65,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/* \
  && chown -R mattermost:mattermost /opt/mattermost
 
-# Defaults (override in docker-compose or Coolify env)
+# Defaults (override in compose/Coolify)
 ENV MM_SQLSETTINGS_DRIVERNAME=postgres \
     MM_SQLSETTINGS_DATASOURCE="postgres://mmuser:mostest@db:5432/mattermost?sslmode=disable&connect_timeout=10" \
     MM_SERVICESETTINGS_SITEURL="" \
