@@ -8,22 +8,30 @@ FROM golang:${GO_VERSION}-bookworm AS builder
 
 ENV CGO_ENABLED=1 \
     GOTOOLCHAIN=auto \
-    NODE_OPTIONS=--max_old_space_size=4096
+    NODE_OPTIONS=--max_old_space_size=4096 \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_AUDIT=false \
+    CI=1
+# If you prefer to always compile native addons from source instead of using vendor binaries, uncomment:
+# ENV npm_config_build_from_source=true
 
-# deps: git/make/gcc + Node.js 20 for webapp build
+# Tooling for webapp + native modules + a native gifsicle binary
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git make gcc tzdata gnupg && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
-    node --version && npm --version && \
-    rm -rf /var/lib/apt/lists/*
+    ca-certificates curl git tzdata gnupg \
+    make g++ python3 pkg-config \
+    autoconf automake libtool \
+    gifsicle \
+ && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && node --version && npm --version \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-# Always pull latest default branch (master)
+# Always pull latest default branch
 RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
-WORKDIR /src/mattermost/server
 
-# Build using official Makefile (does code-gen + builds webapp)
+WORKDIR /src/mattermost/server
+# Use official Makefile (does codegen + builds server and webapp)
 RUN make build
 
 ##
@@ -43,9 +51,9 @@ COPY --from=builder /src/mattermost/webapp/dist            /opt/mattermost/clien
 
 # Minimal runtime deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tzdata && \
-    rm -rf /var/lib/apt/lists/* && \
-    chown -R mattermost:mattermost /opt/mattermost
+    ca-certificates tzdata \
+ && rm -rf /var/lib/apt/lists/* \
+ && chown -R mattermost:mattermost /opt/mattermost
 
 # Defaults (override in compose/Coolify)
 ENV MM_SQLSETTINGS_DRIVERNAME=postgres \
