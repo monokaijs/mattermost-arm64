@@ -1,12 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
 ##
-## Build server (Go) — requires Go >= 1.24.5
+## Build server (Go) — Mattermost now needs Go >= 1.24.5
 ##
 ARG GO_VERSION=1.24.5
 FROM golang:${GO_VERSION}-bookworm AS go-builder
 
-# Allow Go to fetch the exact patch/minor toolchain if the repo requests it
 ENV CGO_ENABLED=1 \
     GOTOOLCHAIN=auto
 
@@ -15,15 +14,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-
-# Always clone the latest default branch (master)
+# Always clone latest default branch (master)
 RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
 
+# Build ONLY the server binary (no webapp)
 WORKDIR /src/mattermost/server
-
-# Build the Mattermost server binary
-RUN make build
-# => ./bin/mattermost
+# Pre-download modules for better caching
+RUN go mod download
+# Build the server; avoid Makefile so it doesn't try to build webapp
+RUN mkdir -p /out && \
+    go build -trimpath -ldflags "-s -w" -o /out/mattermost ./cmd/mattermost
 
 
 ##
@@ -35,10 +35,9 @@ WORKDIR /src
 RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
 WORKDIR /src/mattermost/webapp
 
-# Install and build the React webapp
+# Build production client bundle
 RUN npm ci
-RUN npm run build
-# => ./dist
+RUN npm run build   # -> ./dist
 
 
 ##
@@ -46,15 +45,15 @@ RUN npm run build
 ##
 FROM debian:bookworm-slim
 
-# Run as non-root
+# Non-root user
 RUN useradd -u 2000 -m mattermost
 
 WORKDIR /opt/mattermost
 RUN mkdir -p bin client config data logs plugins
 
 # Copy artifacts
-COPY --from=go-builder  /src/mattermost/server/bin/mattermost /opt/mattermost/bin/mattermost
-COPY --from=web-builder /src/mattermost/webapp/dist            /opt/mattermost/client
+COPY --from=go-builder  /out/mattermost                 /opt/mattermost/bin/mattermost
+COPY --from=web-builder /src/mattermost/webapp/dist     /opt/mattermost/client
 
 # Minimal runtime deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
