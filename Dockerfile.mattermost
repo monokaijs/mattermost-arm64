@@ -1,59 +1,45 @@
 # syntax=docker/dockerfile:1.7
 
 ##
-## Build server (Go) — Mattermost now needs Go >= 1.24.5
+## Builder (Go + Node) — builds server + webapp via Makefile
 ##
 ARG GO_VERSION=1.24.5
-FROM golang:${GO_VERSION}-bookworm AS go-builder
+FROM golang:${GO_VERSION}-bookworm AS builder
 
 ENV CGO_ENABLED=1 \
     GOTOOLCHAIN=auto
 
+# deps: git/make/gcc + Node.js 20 for webapp build
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git make gcc ca-certificates && \
+    ca-certificates curl git make gcc tzdata gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    node --version && npm --version && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-# Always clone latest default branch (master)
+# Always pull latest default branch (master)
 RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
-
-# Build ONLY the server binary (no webapp)
 WORKDIR /src/mattermost/server
-# Pre-download modules for better caching
-RUN go mod download
-# Build the server; avoid Makefile so it doesn't try to build webapp
-RUN mkdir -p /out && \
-    go build -trimpath -ldflags "-s -w" -o /out/mattermost ./cmd/mattermost
 
+# Build using official Makefile (does code-gen + webapp build)
+# This will produce ./bin/mattermost and webapp ./dist
+RUN make build
 
 ##
-## Build webapp (React)
-##
-FROM node:20-bookworm AS web-builder
-
-WORKDIR /src
-RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
-WORKDIR /src/mattermost/webapp
-
-# Build production client bundle
-RUN npm ci
-RUN npm run build   # -> ./dist
-
-
-##
-## Runtime image
+## Runtime
 ##
 FROM debian:bookworm-slim
 
-# Non-root user
+# Non-root runtime user
 RUN useradd -u 2000 -m mattermost
 
 WORKDIR /opt/mattermost
 RUN mkdir -p bin client config data logs plugins
 
-# Copy artifacts
-COPY --from=go-builder  /out/mattermost                 /opt/mattermost/bin/mattermost
-COPY --from=web-builder /src/mattermost/webapp/dist     /opt/mattermost/client
+# Copy artifacts from builder
+COPY --from=builder /src/mattermost/server/bin/mattermost /opt/mattermost/bin/mattermost
+COPY --from=builder /src/mattermost/webapp/dist            /opt/mattermost/client
 
 # Minimal runtime deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -61,7 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/* && \
     chown -R mattermost:mattermost /opt/mattermost
 
-# Defaults (override via compose/Coolify)
+# Defaults (override in compose/Coolify)
 ENV MM_SQLSETTINGS_DRIVERNAME=postgres \
     MM_SQLSETTINGS_DATASOURCE="postgres://mmuser:mostest@db:5432/mattermost?sslmode=disable&connect_timeout=10" \
     MM_SERVICESETTINGS_SITEURL="" \
