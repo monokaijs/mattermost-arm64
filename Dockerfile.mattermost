@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1.7
+
+##
+## Build server (Go)
+##
+FROM golang:1.22-bookworm AS go-builder
+
+ENV CGO_ENABLED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git make gcc ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Always clone the latest default branch (master)
+RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
+
+WORKDIR /src/mattermost/server
+
+# Build the Mattermost server binary
+RUN make build
+# Result: ./bin/mattermost
+
+
+##
+## Build webapp (React)
+##
+FROM node:20-bookworm AS web-builder
+
+WORKDIR /src
+
+RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
+
+WORKDIR /src/mattermost/webapp
+
+# Install and build the React webapp
+RUN npm ci
+RUN npm run build
+# Result: ./dist
+
+
+##
+## Runtime image
+##
+FROM debian:bookworm-slim
+
+RUN useradd -u 2000 -m mattermost
+
+WORKDIR /opt/mattermost
+
+# Create directories expected by Mattermost
+RUN mkdir -p bin client config data logs plugins
+
+# Copy server + client artifacts
+COPY --from=go-builder /src/mattermost/server/bin/mattermost /opt/mattermost/bin/mattermost
+COPY --from=web-builder /src/mattermost/webapp/dist /opt/mattermost/client
+
+# Minimal dependencies: certs + timezones
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata && \
+    rm -rf /var/lib/apt/lists/* && \
+    chown -R mattermost:mattermost /opt/mattermost
+
+# Default environment (override in docker-compose or Coolify)
+ENV MM_SQLSETTINGS_DRIVERNAME=postgres \
+    MM_SQLSETTINGS_DATASOURCE="postgres://mmuser:mostest@db:5432/mattermost?sslmode=disable&connect_timeout=10" \
+    MM_SERVICESETTINGS_SITEURL="" \
+    MM_PLUGINSETTINGS_ENABLE=true
+
+EXPOSE 8065
+
+USER mattermost
+
+ENTRYPOINT ["/opt/mattermost/bin/mattermost"]
+CMD ["--listen-addr", ":8065"]
