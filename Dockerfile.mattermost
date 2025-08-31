@@ -1,11 +1,14 @@
 # syntax=docker/dockerfile:1.7
 
 ##
-## Build server (Go)
+## Build server (Go) — requires Go >= 1.24.5
 ##
-FROM golang:1.22-bookworm AS go-builder
+ARG GO_VERSION=1.24.5
+FROM golang:${GO_VERSION}-bookworm AS go-builder
 
-ENV CGO_ENABLED=1
+# Allow Go to fetch the exact patch/minor toolchain if the repo requests it
+ENV CGO_ENABLED=1 \
+    GOTOOLCHAIN=auto
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git make gcc ca-certificates && \
@@ -20,7 +23,7 @@ WORKDIR /src/mattermost/server
 
 # Build the Mattermost server binary
 RUN make build
-# Result: ./bin/mattermost
+# => ./bin/mattermost
 
 
 ##
@@ -29,15 +32,13 @@ RUN make build
 FROM node:20-bookworm AS web-builder
 
 WORKDIR /src
-
 RUN git clone --depth 1 https://github.com/mattermost/mattermost.git
-
 WORKDIR /src/mattermost/webapp
 
 # Install and build the React webapp
 RUN npm ci
 RUN npm run build
-# Result: ./dist
+# => ./dist
 
 
 ##
@@ -45,31 +46,29 @@ RUN npm run build
 ##
 FROM debian:bookworm-slim
 
+# Run as non-root
 RUN useradd -u 2000 -m mattermost
 
 WORKDIR /opt/mattermost
-
-# Create directories expected by Mattermost
 RUN mkdir -p bin client config data logs plugins
 
-# Copy server + client artifacts
-COPY --from=go-builder /src/mattermost/server/bin/mattermost /opt/mattermost/bin/mattermost
-COPY --from=web-builder /src/mattermost/webapp/dist /opt/mattermost/client
+# Copy artifacts
+COPY --from=go-builder  /src/mattermost/server/bin/mattermost /opt/mattermost/bin/mattermost
+COPY --from=web-builder /src/mattermost/webapp/dist            /opt/mattermost/client
 
-# Minimal dependencies: certs + timezones
+# Minimal runtime deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates tzdata && \
     rm -rf /var/lib/apt/lists/* && \
     chown -R mattermost:mattermost /opt/mattermost
 
-# Default environment (override in docker-compose or Coolify)
+# Defaults (override via compose/Coolify)
 ENV MM_SQLSETTINGS_DRIVERNAME=postgres \
     MM_SQLSETTINGS_DATASOURCE="postgres://mmuser:mostest@db:5432/mattermost?sslmode=disable&connect_timeout=10" \
     MM_SERVICESETTINGS_SITEURL="" \
     MM_PLUGINSETTINGS_ENABLE=true
 
 EXPOSE 8065
-
 USER mattermost
 
 ENTRYPOINT ["/opt/mattermost/bin/mattermost"]
